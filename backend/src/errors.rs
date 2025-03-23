@@ -58,15 +58,6 @@ pub enum AppError {
     #[error("Token expired")]
     TokenExpired,
 
-    #[error("Invalid credentials")]
-    InvalidCredentials,
-
-    #[error("MFA required")]
-    MfaRequired,
-
-    #[error("Invalid MFA code")]
-    InvalidMfaCode,
-
     #[error("User is disabled")]
     UserDisabled,
 
@@ -176,21 +167,6 @@ impl<T> From<AppError> for HttpResponse<T> {
                 message: "Token expired".to_string(),
                 data: None,
             },
-            AppError::InvalidCredentials => HttpResponse {
-                status: 401,
-                message: "Invalid credentials".to_string(),
-                data: None,
-            },
-            AppError::MfaRequired => HttpResponse {
-                status: 401,
-                message: "MFA required".to_string(),
-                data: None,
-            },
-            AppError::InvalidMfaCode => HttpResponse {
-                status: 401,
-                message: "Invalid MFA code".to_string(),
-                data: None,
-            },
             AppError::UserDisabled => HttpResponse {
                 status: 403,
                 message: "User is disabled".to_string(),
@@ -284,6 +260,12 @@ impl From<UserError> for AppError {
             }
             UserError::PasswordToShort => {
                 AppError::InvalidOrMissingFields("Password too short".to_string())
+            },
+            UserError::PasskeyNotFound(id) => {
+                AppError::ValidationError(format!("Passkey with ID {} not found", id))
+            },
+            UserError::PasswordNotSet => {
+                AppError::ValidationError("Password not set for this user".to_string())
             }
         }
     }

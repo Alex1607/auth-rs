@@ -48,6 +48,12 @@ pub enum UserError {
 
     #[error("Invalid email")]
     InvalidEmail,
+
+    #[error("Passkey not found: {0}")]
+    PasskeyNotFound(String),
+
+    #[error("Password not set for this user")]
+    PasswordNotSet,
 }
 
 // Implement conversion from UserError to HttpResponse
@@ -127,6 +133,16 @@ impl<T> From<UserError> for HttpResponse<T> {
             UserError::InvalidEmail => HttpResponse {
                 status: 400,
                 message: "Invalid email".to_string(),
+                data: None,
+            },
+            UserError::PasskeyNotFound(id) => HttpResponse {
+                status: 404,
+                message: format!("Passkey with ID {} not found", id),
+                data: None,
+            },
+            UserError::PasswordNotSet => HttpResponse {
+                status: 400,
+                message: "Password not set for this user".to_string(),
                 data: None,
             },
         }

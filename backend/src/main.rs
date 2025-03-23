@@ -8,6 +8,7 @@ mod utils;
 use std::{collections::HashMap, env};
 
 use auth::mfa::MfaHandler;
+use auth::passkey::PasskeyChallenge;
 use db::AuthRsDatabase;
 use dotenv::dotenv;
 use errors::{AppError, AppResult};
@@ -28,6 +29,7 @@ lazy_static::lazy_static! {
     //TODO: Replace with Redis or other cache, so this application can be stateless
     static ref OAUTH_CODES: Mutex<HashMap<u32, TokenOAuthData>> = Mutex::new(HashMap::new());
     static ref MFA_SESSIONS: Mutex<HashMap<Uuid, MfaHandler>> = Mutex::new(HashMap::new());
+    static ref PASSKEY_SESSIONS: Mutex<HashMap<String, PasskeyChallenge>> = Mutex::new(HashMap::new());
 
     static ref ADMIN_ROLE_ID: Uuid = Uuid::parse_str("00000000-0000-0000-0000-000000000000")
         .expect("Failed to parse ADMIN_ROLE_ID UUID");
@@ -174,7 +176,14 @@ fn rocket() -> _ {
                 // Auth Routes
                 routes::auth::register::register,
                 routes::auth::login::login,
-                routes::auth::mfa::mfa
+                routes::auth::mfa::mfa,
+                // Passkey Routes
+                routes::auth::passkey::start_registration,
+                routes::auth::passkey::finish_registration,
+                routes::auth::passkey::start_authentication,
+                routes::auth::passkey::finish_authentication,
+                routes::auth::passkey::list_passkeys,
+                routes::auth::passkey::remove_passkey,
             ],
         )
 }

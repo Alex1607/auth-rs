@@ -21,10 +21,10 @@ use crate::{
 #[serde(crate = "rocket::serde")]
 #[serde(rename_all = "camelCase")]
 pub struct CreateUserData {
-    email: String,
-    password: String,
-    first_name: String,
-    last_name: String,
+    pub email: String,
+    pub password: Option<String>,
+    pub first_name: String,
+    pub last_name: String,
 }
 
 #[allow(unused)]
@@ -60,11 +60,15 @@ async fn create_user_internal(
     if data.first_name.len() < 1 {
         return Err(UserError::FirstNameRequired);
     }
-    if data.password.len() < 8 {
-        return Err(UserError::PasswordToShort);
+    
+    // Password validation is only done if a password is provided
+    if let Some(ref password) = data.password {
+        if password.len() < 8 {
+            return Err(UserError::PasswordToShort);
+        }
     }
 
-    // Create new user
+    // Create new user with optional password
     let user = User::new(
         data.email.to_lowercase(),
         data.password,

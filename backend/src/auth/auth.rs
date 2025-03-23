@@ -41,10 +41,6 @@ impl AuthEntity {
     pub fn user(&self) -> AppResult<&User> {
         self.user.as_ref().ok_or(AppError::MissingPermissions)
     }
-
-    pub fn token(&self) -> AppResult<&OAuthToken> {
-        self.token.as_ref().ok_or(AppError::InvalidToken)
-    }
 }
 
 #[derive(Debug)]
