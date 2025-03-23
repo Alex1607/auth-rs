@@ -35,57 +35,6 @@ pub struct LoginResponse {
     pub has_passkeys: bool,
 }
 
-#[derive(Serialize)]
-#[serde(crate = "rocket::serde")]
-#[serde(rename_all = "camelCase")]
-pub struct AuthOptionsResponse {
-    pub has_passkeys: bool,
-    pub requires_mfa: bool,
-}
-
-// Process to check authentication options for a user
-async fn get_auth_options(
-    db: &Connection<AuthRsDatabase>,
-    email: String,
-) -> ApiResult<AuthOptionsResponse> {
-    let user = User::get_by_email(&email, db)
-        .await
-        .map_err(|_| ApiError::NotFound("User not found".to_string()))?;
-
-    if user.disabled {
-        return Err(ApiError::Forbidden("User account is disabled".to_string()));
-    }
-
-    // Check what authentication methods the user has
-    let has_passkeys = match &user.passkeys {
-        Some(passkeys) => !passkeys.is_empty(),
-        None => false,
-    };
-    let requires_mfa = MfaHandler::is_mfa_required(&user);
-
-    Ok(AuthOptionsResponse {
-        has_passkeys,
-        requires_mfa,
-    })
-}
-
-// Endpoint to discover authentication options
-#[post("/auth/options", format = "json", data = "<data>")]
-pub async fn auth_options(
-    db: Connection<AuthRsDatabase>,
-    data: Json<String>,
-) -> (Status, Json<HttpResponse<AuthOptionsResponse>>) {
-    let email = data.into_inner();
-    
-    match get_auth_options(&db, email).await {
-        Ok(options) => json_response(HttpResponse::success(
-            "Authentication options retrieved",
-            options,
-        )),
-        Err(err) => json_response(err.into()),
-    }
-}
-
 /// # Authentication Flow
 /// This API supports multiple authentication methods:
 /// 
@@ -99,10 +48,6 @@ pub async fn auth_options(
 ///    - If user has passkeys, they're prompted to use passkey authentication
 ///    - User completes passkey authentication via /auth/passkey/login endpoints
 ///    - On success, user receives a token
-///
-/// 3. Discovery Flow:
-///    - User can check available authentication methods via /auth/options
-///    - Based on the response, client can choose the appropriate auth method
 ///
 /// The API is designed to be flexible, allowing users to authenticate with
 /// either passwords, passkeys, or a combination of both plus MFA.

@@ -13,30 +13,7 @@ Passkeys provide a more secure alternative to passwords, using public key crypto
 
 ## Authentication Flows
 
-### 1. Discovery Flow
-
-Before attempting login, you can check what authentication methods are available for a user:
-
-```http
-POST /auth/options
-Content-Type: application/json
-
-"user@example.com"
-```
-
-Response:
-```json
-{
-  "status": 200,
-  "message": "Authentication options retrieved",
-  "data": {
-    "has_passkeys": true,
-    "requires_mfa": false
-  }
-}
-```
-
-### 2. Traditional Password Flow
+### 1. Traditional Password Flow
 
 ```http
 POST /auth/login
@@ -48,7 +25,7 @@ Content-Type: application/json
 }
 ```
 
-### 3. Passkey Authentication Flow
+### 2. Passkey Authentication Flow
 
 When a user wants to authenticate with a passkey, the process involves two steps:
 
@@ -290,32 +267,56 @@ async function authenticateWithPasskey(email) {
   }
 }
 
-// Login flow with options
+// Login flow example
 async function login() {
   const email = document.getElementById('email').value;
   
-  // Check available auth methods
-  const optionsResponse = await fetch('/auth/options', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(email)
-  });
+  // Offer both authentication options directly without checking /auth/options
+  const usePasskey = document.getElementById('use-passkey').checked;
   
-  const optionsData = await optionsResponse.json();
-  
-  if (optionsData.data.has_passkeys) {
-    // Show option to use passkey
-    if (confirm('Would you like to login with a passkey?')) {
-      await authenticateWithPasskey(email);
-      return;
-    }
+  if (usePasskey) {
+    await authenticateWithPasskey(email);
+    return;
   }
   
   // Otherwise, continue with password login
   const password = document.getElementById('password').value;
-  // Proceed with traditional login...
+  
+  try {
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ email, password })
+    });
+    
+    const result = await response.json();
+    
+    if (result.status === 200) {
+      if (result.data.mfa_required) {
+        // Redirect to MFA verification flow
+        handleMfaFlow(result.data.mfa_flow_id);
+      } else if (result.data.use_passkey) {
+        // User has passkeys, suggest using them
+        if (confirm('Would you like to use a passkey for more secure login?')) {
+          await authenticateWithPasskey(email);
+        } else {
+          // User declined to use passkey, proceed with password login
+          // (You may need to handle this case depending on your backend configuration)
+        }
+      } else {
+        // Traditional login successful
+        localStorage.setItem('authToken', result.data.token);
+        window.location.href = '/dashboard';
+      }
+    } else {
+      alert(`Authentication error: ${result.message}`);
+    }
+  } catch (error) {
+    console.error('Login failed:', error);
+    alert('Login failed. See console for details.');
+  }
 }
 ```
 
