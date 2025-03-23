@@ -5,6 +5,8 @@ use thiserror::Error;
 
 use crate::models::http_response::HttpResponse;
 use crate::models::oauth_application::OAuthApplicationError;
+use crate::models::passkey_error::PasskeyError;
+
 use crate::models::role::RoleError;
 use crate::models::user_error::UserError;
 
@@ -303,6 +305,39 @@ impl From<RoleError> for AppError {
     }
 }
 
+impl From<PasskeyError> for AppError {
+    fn from(error: PasskeyError) -> Self {
+        match error {
+            PasskeyError::ChallengeNotFound =>
+                AppError::ValidationError("Challenge not found or expired".to_string()),
+            PasskeyError::InvalidChallenge =>
+                AppError::ValidationError("Invalid challenge".to_string()),
+            PasskeyError::ChallengeExpired =>
+                AppError::ValidationError("Challenge expired".to_string()),
+            PasskeyError::InvalidCredentialId =>
+                AppError::ValidationError("Invalid credential ID".to_string()),
+            PasskeyError::InvalidPublicKey =>
+                AppError::ValidationError("Invalid public key format".to_string()),
+            PasskeyError::CredentialNotFound =>
+                AppError::ValidationError("Credential ID not found for user".to_string()),
+            PasskeyError::PasskeyAlreadyRegistered =>
+                AppError::ValidationError("Passkey already registered for this user".to_string()),
+            PasskeyError::ReplayAttack =>
+                AppError::ValidationError("Possible replay attack detected".to_string()),
+            PasskeyError::UserNotFound =>
+                AppError::ValidationError("No user associated with this challenge".to_string()),
+            PasskeyError::DatabaseError(msg) =>
+                AppError::DatabaseError(msg),
+            PasskeyError::UpdateError(msg) =>
+                AppError::InternalServerError(format!("Failed to update passkey: {}", msg)),
+            PasskeyError::ChallengeGenerationError(msg) =>
+                AppError::InternalServerError(format!("Failed to generate challenge: {}", msg)),
+            PasskeyError::InternalServerError(msg) =>
+                AppError::InternalServerError(msg),
+        }
+    }
+}
+
 // Add From<ApiError> implementations for domain-specific errors
 impl From<ApiError> for RoleError {
     fn from(error: ApiError) -> Self {
@@ -326,6 +361,50 @@ impl From<ApiError> for OAuthApplicationError {
             ApiError::Unauthorized(msg) => OAuthApplicationError::InvalidData(msg),
             ApiError::InternalError(msg) => OAuthApplicationError::InternalServerError(msg),
             ApiError::AppError(err) => err.into(),
+        }
+    }
+}
+
+impl From<PasskeyError> for ApiError {
+    fn from(error: PasskeyError) -> Self {
+        match error {
+            PasskeyError::ChallengeNotFound => ApiError::BadRequest("Challenge not found or expired".to_string()),
+            PasskeyError::InvalidChallenge => ApiError::BadRequest("Invalid challenge".to_string()),
+            PasskeyError::ChallengeExpired => ApiError::BadRequest("Challenge expired".to_string()),
+            PasskeyError::InvalidCredentialId => ApiError::BadRequest("Invalid credential ID".to_string()),
+            PasskeyError::InvalidPublicKey => ApiError::BadRequest("Invalid public key format".to_string()),
+            PasskeyError::CredentialNotFound => ApiError::BadRequest("Credential ID not found for user".to_string()),
+            PasskeyError::PasskeyAlreadyRegistered => ApiError::BadRequest("Passkey already registered for this user".to_string()),
+            PasskeyError::ReplayAttack => ApiError::BadRequest("Possible replay attack detected".to_string()),
+            PasskeyError::UserNotFound => ApiError::BadRequest("No user associated with this challenge".to_string()),
+            PasskeyError::DatabaseError(msg) => ApiError::InternalError(format!("Database error: {}", msg)),
+            PasskeyError::UpdateError(msg) => ApiError::InternalError(format!("Failed to update passkey: {}", msg)),
+            PasskeyError::ChallengeGenerationError(msg) => ApiError::InternalError(format!("Failed to generate challenge: {}", msg)),
+            PasskeyError::InternalServerError(msg) => ApiError::InternalError(msg),
+        }
+    }
+}
+
+impl From<UserError> for ApiError {
+    fn from(error: UserError) -> Self {
+        match error {
+            UserError::NotFound(id) => ApiError::NotFound(format!("User with ID {} not found", id)),
+            UserError::EmailAlreadyExists(email) => ApiError::BadRequest(format!("User with email {} already exists", email)),
+            UserError::InvalidUuid(msg) => ApiError::BadRequest(format!("Invalid UUID: {}", msg)),
+            UserError::MissingPermissions => ApiError::Forbidden("Missing permissions to perform this action".to_string()),
+            UserError::SystemUserModification => ApiError::Forbidden("Cannot modify system user".to_string()),
+            UserError::PasswordHashingError => ApiError::InternalError("Error during password hashing".to_string()),
+            UserError::AdminRoleAssignment => ApiError::Forbidden("Only system admin can assign admin role".to_string()),
+            UserError::RoleNotFound(id) => ApiError::BadRequest(format!("Role with ID {} does not exist", id)),
+            UserError::UserDisabled => ApiError::Forbidden("User is disabled".to_string()),
+            UserError::NoUpdatesApplied => ApiError::BadRequest("No updates applied to user".to_string()),
+            UserError::DatabaseError(msg) => ApiError::InternalError(format!("Database error: {}", msg)),
+            UserError::InternalServerError(msg) => ApiError::InternalError(format!("Internal server error: {}", msg)),
+            UserError::FirstNameRequired => ApiError::BadRequest("First name is required".to_string()),
+            UserError::PasswordToShort => ApiError::BadRequest("Password too short".to_string()),
+            UserError::InvalidEmail => ApiError::BadRequest("Invalid email".to_string()),
+            UserError::PasskeyNotFound(id) => ApiError::NotFound(format!("Passkey with ID {} not found", id)),
+            UserError::PasswordNotSet => ApiError::BadRequest("Password not set for this user".to_string()),
         }
     }
 }

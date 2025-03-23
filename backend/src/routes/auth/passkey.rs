@@ -8,7 +8,9 @@ use rocket_db_pools::Connection;
 use crate::auth::passkey::{PasskeyHandler, PasskeyOperation};
 use crate::auth::auth::AuthEntity;
 use crate::db::AuthRsDatabase;
+use crate::errors::{ApiError, ApiResult};
 use crate::models::http_response::HttpResponse;
+use crate::models::passkey_error::PasskeyError;
 use crate::models::user::{User, UserDTO, PasskeyDTO};
 use crate::utils::response::json_response;
 
@@ -92,41 +94,22 @@ pub struct FinishAuthenticationResponse {
     pub user: UserDTO,
 }
 
-// Start registration route
-#[post("/auth/passkey/register/start", format = "json", data = "<data>")]
-pub async fn start_registration(
-    data: Json<StartRegistrationRequest>,
+// Process start registration and return a Result
+async fn process_start_registration(
+    data: StartRegistrationRequest,
     auth: AuthEntity,
-    db: Connection<AuthRsDatabase>,
-) -> (Status, Json<HttpResponse<StartRegistrationResponse>>) {
+    _db: Connection<AuthRsDatabase>,
+) -> ApiResult<StartRegistrationResponse> {
     // Verify user is authenticated (can only register passkeys if logged in)
-    let user = match auth.user() {
-        Ok(user) => user,
-        Err(_) => {
-            return json_response(HttpResponse::<StartRegistrationResponse>::error(
-                401,
-                "Authentication required",
-                None,
-            ))
-        }
-    };
+    let user = auth.user()?;
 
     // Generate a challenge for registration
-    let challenge = match PasskeyHandler::generate_challenge(
+    let challenge = PasskeyHandler::generate_challenge(
         PasskeyOperation::Registration,
         Some(user.clone()),
     )
     .await
-    {
-        Ok(challenge) => challenge,
-        Err(err) => {
-            return json_response(HttpResponse::<StartRegistrationResponse>::error(
-                500,
-                &format!("Failed to generate challenge: {}", err),
-                None,
-            ))
-        }
-    };
+    .map_err(|err| PasskeyError::ChallengeGenerationError(err.to_string()))?;
 
     // Create registration response
     let response = StartRegistrationResponse {
@@ -137,50 +120,44 @@ pub async fn start_registration(
         passkey_name: data.passkey_name.clone(),
     };
 
-    json_response(HttpResponse::success(
-        "Passkey registration initiated",
-        response,
-    ))
+    Ok(response)
 }
 
-// Finish registration route
-#[post("/auth/passkey/register/finish", format = "json", data = "<data>")]
-pub async fn finish_registration(
-    data: Json<FinishRegistrationRequest>,
+// Start registration route
+#[post("/auth/passkey/register/start", format = "json", data = "<data>")]
+pub async fn start_registration(
+    data: Json<StartRegistrationRequest>,
+    auth: AuthEntity,
+    db: Connection<AuthRsDatabase>,
+) -> (Status, Json<HttpResponse<StartRegistrationResponse>>) {
+    let data = data.into_inner();
+    
+    match process_start_registration(data, auth, db).await {
+        Ok(response) => json_response(HttpResponse::success(
+            "Passkey registration initiated",
+            response,
+        )),
+        Err(err) => json_response(err.into()),
+    }
+}
+
+// Process finish registration and return a Result
+async fn process_finish_registration(
+    data: FinishRegistrationRequest,
     _db: Connection<AuthRsDatabase>,
-) -> (Status, Json<HttpResponse<FinishRegistrationResponse>>) {
+) -> ApiResult<FinishRegistrationResponse> {
     // Retrieve the challenge
-    let challenge = match PasskeyHandler::get_challenge_by_id(&data.challenge_id).await {
-        Some(challenge) => challenge,
-        None => {
-            return json_response(HttpResponse::<FinishRegistrationResponse>::error(
-                400,
-                "Invalid or expired challenge",
-                None,
-            ))
-        }
-    };
+    let challenge = PasskeyHandler::get_challenge_by_id(&data.challenge_id)
+        .await
+        .ok_or(PasskeyError::ChallengeNotFound)?;
 
     // Verify the challenge
     if !PasskeyHandler::is_challenge_valid(&challenge, &data.challenge) {
-        return json_response(HttpResponse::<FinishRegistrationResponse>::error(
-            400,
-            "Invalid challenge response",
-            None,
-        ));
+        return Err(PasskeyError::InvalidChallenge.into());
     }
 
     // Get the user from the challenge
-    let mut user = match challenge.user {
-        Some(user) => user,
-        None => {
-            return json_response(HttpResponse::<FinishRegistrationResponse>::error(
-                400,
-                "No user associated with this challenge",
-                None,
-            ))
-        }
-    };
+    let mut user = challenge.user.ok_or(PasskeyError::UserNotFound)?;
 
     // Verify registration data
     match PasskeyHandler::verify_registration(
@@ -199,17 +176,13 @@ pub async fn finish_registration(
             {
                 Some(Some(_)) => {
                     // Passkey already exists
-                    return json_response(HttpResponse::<FinishRegistrationResponse>::error(
-                        400,
-                        "Passkey already registered for this user",
-                        None,
-                    ));
+                    return Err(PasskeyError::PasskeyAlreadyRegistered.into());
                 }
                 _ => "My Passkey".to_string(), // Default name if not found in challenge data
             };
 
             // Add the passkey to the user
-            let passkey = match user
+            let passkey = user
                 .add_passkey(
                     passkey_name,
                     data.public_key.clone(),
@@ -217,16 +190,7 @@ pub async fn finish_registration(
                     &_db,
                 )
                 .await
-            {
-                Ok(passkey) => passkey,
-                Err(err) => {
-                    return json_response(HttpResponse::<FinishRegistrationResponse>::error(
-                        500,
-                        &format!("Failed to add passkey: {}", err),
-                        None,
-                    ))
-                }
-            };
+                .map_err(|err| PasskeyError::DatabaseError(err.to_string()))?;
 
             // Clean up the challenge
             PasskeyHandler::remove_challenge(&data.challenge_id).await;
@@ -239,45 +203,46 @@ pub async fn finish_registration(
                 last_used: passkey.last_used,
             };
 
-            json_response(HttpResponse::success(
-                "Passkey registered successfully",
-                FinishRegistrationResponse {
-                    passkey: passkey_dto,
-                    user: user.to_dto(),
-                },
-            ))
+            Ok(FinishRegistrationResponse {
+                passkey: passkey_dto,
+                user: user.to_dto(),
+            })
         }
         Ok(false) => {
-            json_response(HttpResponse::<FinishRegistrationResponse>::error(
-                400,
-                "Registration verification failed",
-                None,
-            ))
+            Err(PasskeyError::InvalidPublicKey.into())
         }
-        Err(err) => json_response(HttpResponse::<FinishRegistrationResponse>::error(
-            400,
-            &format!("Registration error: {}", err),
-            None,
-        )),
+        Err(err) => Err(PasskeyError::InternalServerError(format!("Registration error: {}", err)).into()),
     }
 }
 
-// Start authentication route
-#[post("/auth/passkey/login/start", format = "json", data = "<data>")]
-pub async fn start_authentication(
-    data: Json<StartAuthenticationRequest>,
+// Finish registration route
+#[post("/auth/passkey/register/finish", format = "json", data = "<data>")]
+pub async fn finish_registration(
+    data: Json<FinishRegistrationRequest>,
+    db: Connection<AuthRsDatabase>,
+) -> (Status, Json<HttpResponse<FinishRegistrationResponse>>) {
+    let data = data.into_inner();
+    
+    match process_finish_registration(data, db).await {
+        Ok(response) => json_response(HttpResponse::success(
+            "Passkey registered successfully",
+            response,
+        )),
+        Err(err) => json_response(err.into()),
+    }
+}
+
+// Process start authentication and return a Result
+async fn process_start_authentication(
+    data: StartAuthenticationRequest,
     _db: Connection<AuthRsDatabase>,
-) -> (Status, Json<HttpResponse<StartAuthenticationResponse>>) {
+) -> ApiResult<StartAuthenticationResponse> {
     // If email is provided, find the user to get their credentials
     let user = if let Some(email) = &data.email {
         match User::get_by_email(email, &_db).await {
             Ok(user) => {
                 if user.disabled {
-                    return json_response(HttpResponse::<StartAuthenticationResponse>::error(
-                        403,
-                        "User account is disabled",
-                        None,
-                    ));
+                    return Err(ApiError::Forbidden("User account is disabled".to_string()));
                 }
                 Some(user)
             }
@@ -291,21 +256,12 @@ pub async fn start_authentication(
     };
 
     // Generate a challenge for authentication
-    let challenge = match PasskeyHandler::generate_challenge(
+    let challenge = PasskeyHandler::generate_challenge(
         PasskeyOperation::Authentication,
         user.clone(),
     )
     .await
-    {
-        Ok(challenge) => challenge,
-        Err(err) => {
-            return json_response(HttpResponse::<StartAuthenticationResponse>::error(
-                500,
-                &format!("Failed to generate challenge: {}", err),
-                None,
-            ))
-        }
-    };
+    .map_err(|err| PasskeyError::ChallengeGenerationError(err.to_string()))?;
 
     // Create authentication response
     let mut response = StartAuthenticationResponse {
@@ -333,48 +289,46 @@ pub async fn start_authentication(
         }
     }
 
-    json_response(HttpResponse::success(
-        "Passkey authentication initiated",
-        response,
-    ))
+    Ok(response)
 }
 
-// Finish authentication route
-#[post("/auth/passkey/login/finish", format = "json", data = "<data>")]
-pub async fn finish_authentication(
-    data: Json<FinishAuthenticationRequest>,
+// Start authentication route
+#[post("/auth/passkey/login/start", format = "json", data = "<data>")]
+pub async fn start_authentication(
+    data: Json<StartAuthenticationRequest>,
     db: Connection<AuthRsDatabase>,
-) -> (Status, Json<HttpResponse<FinishAuthenticationResponse>>) {
+) -> (Status, Json<HttpResponse<StartAuthenticationResponse>>) {
+    let data = data.into_inner();
+    
+    match process_start_authentication(data, db).await {
+        Ok(response) => json_response(HttpResponse::success(
+            "Passkey authentication initiated",
+            response,
+        )),
+        Err(err) => json_response(err.into()),
+    }
+}
+
+// Process finish authentication and return a Result
+async fn process_finish_authentication(
+    data: FinishAuthenticationRequest,
+    db: Connection<AuthRsDatabase>,
+) -> ApiResult<FinishAuthenticationResponse> {
     // Retrieve the challenge
-    let challenge = match PasskeyHandler::get_challenge_by_id(&data.challenge_id).await {
-        Some(challenge) => challenge,
-        None => {
-            return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                400,
-                "Invalid or expired challenge",
-                None,
-            ))
-        }
-    };
+    let challenge = PasskeyHandler::get_challenge_by_id(&data.challenge_id)
+        .await
+        .ok_or(PasskeyError::ChallengeNotFound)?;
 
     // Verify the challenge
     if !PasskeyHandler::is_challenge_valid(&challenge, &data.challenge) {
-        return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-            400,
-            "Invalid challenge response",
-            None,
-        ));
+        return Err(PasskeyError::InvalidChallenge.into());
     }
 
     // Find the user with this credential ID
     let mut user = if let Some(user) = challenge.user.clone() {
         // Verify this user has the credential
         if user.get_passkey_by_credential_id(&data.credential_id).is_none() {
-            return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                400,
-                "Credential not found for this user",
-                None,
-            ));
+            return Err(PasskeyError::CredentialNotFound.into());
         }
         user
     } else {
@@ -391,33 +345,16 @@ pub async fn finish_authentication(
                     }
                 }
 
-                match found_user {
-                    Some(u) => u,
-                    None => {
-                        return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                            400,
-                            "No user found with this credential",
-                            None,
-                        ));
-                    }
-                }
+                found_user.ok_or(PasskeyError::CredentialNotFound)?
             }
-            Err(_) => {
-                return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                    500,
-                    "Failed to search for users",
-                    None,
-                ));
+            Err(err) => {
+                return Err(PasskeyError::DatabaseError(format!("Failed to search for users: {}", err)).into());
             }
         }
     };
 
     if user.disabled {
-        return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-            403,
-            "User account is disabled",
-            None,
-        ));
+        return Err(ApiError::Forbidden("User account is disabled".to_string()));
     }
 
     // Verify authentication data
@@ -432,16 +369,9 @@ pub async fn finish_authentication(
     ) {
         Ok(true) => {
             // Authentication was successful - update the passkey counter
-            if let Err(err) = user
-                .update_passkey_counter(&data.credential_id, data.counter, &db)
+            user.update_passkey_counter(&data.credential_id, data.counter, &db)
                 .await
-            {
-                return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                    500,
-                    &format!("Failed to update passkey counter: {}", err),
-                    None,
-                ));
-            }
+                .map_err(|err| PasskeyError::UpdateError(format!("Failed to update passkey counter: {}", err)))?;
 
             // Generate a new token for the user
             let new_token = User::generate_token();
@@ -449,58 +379,49 @@ pub async fn finish_authentication(
             user.token = new_token.clone();
 
             // Update the user
-            if let Err(err) = user.update(&db).await {
-                return json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                    500,
-                    &format!("Failed to update user token: {}", err),
-                    None,
-                ));
-            }
+            user.update(&db).await
+                .map_err(|err| PasskeyError::UpdateError(format!("Failed to update user token: {}", err)))?;
 
             // Clean up the challenge
             PasskeyHandler::remove_challenge(&data.challenge_id).await;
 
             // Return success with the user's token
-            json_response(HttpResponse::success(
-                "Authentication successful",
-                FinishAuthenticationResponse {
-                    token: new_token,
-                    user: user.to_dto(),
-                },
-            ))
+            Ok(FinishAuthenticationResponse {
+                token: new_token,
+                user: user.to_dto(),
+            })
         }
         Ok(false) => {
-            json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-                400,
-                "Authentication verification failed",
-                None,
-            ))
+            Err(PasskeyError::InvalidPublicKey.into())
         }
-        Err(err) => json_response(HttpResponse::<FinishAuthenticationResponse>::error(
-            400,
-            &format!("Authentication error: {}", err),
-            None,
-        )),
+        Err(err) => Err(PasskeyError::InternalServerError(format!("Authentication error: {}", err)).into()),
     }
 }
 
-// Get user's passkeys
-#[post("/auth/passkey/list", format = "json")]
-pub async fn list_passkeys(
+// Finish authentication route
+#[post("/auth/passkey/login/finish", format = "json", data = "<data>")]
+pub async fn finish_authentication(
+    data: Json<FinishAuthenticationRequest>,
+    db: Connection<AuthRsDatabase>,
+) -> (Status, Json<HttpResponse<FinishAuthenticationResponse>>) {
+    let data = data.into_inner();
+    
+    match process_finish_authentication(data, db).await {
+        Ok(response) => json_response(HttpResponse::success(
+            "Authentication successful",
+            response,
+        )),
+        Err(err) => json_response(err.into()),
+    }
+}
+
+// Process list passkeys and return a Result
+async fn process_list_passkeys(
     auth: AuthEntity,
     _db: Connection<AuthRsDatabase>,
-) -> (Status, Json<HttpResponse<Vec<PasskeyDTO>>>) {
+) -> ApiResult<Vec<PasskeyDTO>> {
     // Verify user is authenticated
-    let user = match auth.user() {
-        Ok(user) => user,
-        Err(_) => {
-            return json_response(HttpResponse::<Vec<PasskeyDTO>>::error(
-                401,
-                "Authentication required",
-                None,
-            ))
-        }
-    };
+    let user = auth.user()?;
 
     // Get the user's passkeys
     let passkeys = match &user.passkeys {
@@ -516,7 +437,38 @@ pub async fn list_passkeys(
         None => Vec::new(),
     };
 
-    json_response(HttpResponse::success("User passkeys", passkeys))
+    Ok(passkeys)
+}
+
+// Get user's passkeys
+#[post("/auth/passkey/list", format = "json")]
+pub async fn list_passkeys(
+    auth: AuthEntity,
+    db: Connection<AuthRsDatabase>,
+) -> (Status, Json<HttpResponse<Vec<PasskeyDTO>>>) {
+    match process_list_passkeys(auth, db).await {
+        Ok(passkeys) => json_response(HttpResponse::success("User passkeys", passkeys)),
+        Err(err) => json_response(err.into()),
+    }
+}
+
+// Process remove passkey and return a Result
+async fn process_remove_passkey(
+    auth: AuthEntity,
+    db: Connection<AuthRsDatabase>,
+    passkey_id: String,
+) -> ApiResult<UserDTO> {
+    // Verify user is authenticated
+    let user_id = auth.user_id;
+    let mut user = User::get_by_id(user_id, &db).await
+        .map_err(|err| ApiError::from(err))?;
+
+    // Remove the passkey
+    user.remove_passkey(&passkey_id, &db)
+        .await
+        .map_err(|err| PasskeyError::UpdateError(format!("Failed to remove passkey: {}", err)))?;
+    
+    Ok(user.to_dto())
 }
 
 // Remove a passkey
@@ -526,30 +478,13 @@ pub async fn remove_passkey(
     db: Connection<AuthRsDatabase>,
     data: Json<String>,
 ) -> (Status, Json<HttpResponse<UserDTO>>) {
-    // Verify user is authenticated
-    let user_id = auth.user_id;
-    let mut user = match User::get_by_id(user_id, &db).await {
-        Ok(user) => user,
-        Err(_) => {
-            return json_response(HttpResponse::<UserDTO>::error(
-                401,
-                "Authentication required",
-                None,
-            ))
-        }
-    };
-
-    // Remove the passkey
     let passkey_id = data.into_inner();
-    match user.remove_passkey(&passkey_id, &db).await {
-        Ok(_) => json_response(HttpResponse::success(
+    
+    match process_remove_passkey(auth, db, passkey_id).await {
+        Ok(user) => json_response(HttpResponse::success(
             "Passkey removed successfully",
-            user.to_dto(),
+            user,
         )),
-        Err(err) => json_response(HttpResponse::<UserDTO>::error(
-            400,
-            &format!("Failed to remove passkey: {}", err),
-            None,
-        )),
+        Err(err) => json_response(err.into()),
     }
 } 

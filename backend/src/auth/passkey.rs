@@ -5,7 +5,7 @@ use rocket::tokio::{spawn, time::sleep};
 use std::time::Duration;
 use mongodb::bson::Uuid;
 
-use crate::{models::user::User, PASSKEY_SESSIONS};
+use crate::{models::{user::User, passkey_error::PasskeyError}, PASSKEY_SESSIONS};
 
 /// Structure to hold passkey challenge data
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ impl PasskeyHandler {
     pub async fn generate_challenge(
         _operation: PasskeyOperation,
         user: Option<User>,
-    ) -> Result<PasskeyChallenge, String> {
+    ) -> Result<PasskeyChallenge, PasskeyError> {
         // Generate a cryptographically secure random challenge
         let mut challenge_bytes = [0u8; 32];
         rand::Rng::fill(&mut rand::rng(), &mut challenge_bytes);
@@ -94,18 +94,18 @@ impl PasskeyHandler {
         _challenge: &str,
         _client_data: &str,
         _attestation_object: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, PasskeyError> {
         // In a real implementation, this would verify the WebAuthn attestation
         // But for now we'll accept all registrations with valid challenge
         
         // Check public key format
         if public_key.is_empty() {
-            return Err("Invalid public key format".to_string());
+            return Err(PasskeyError::InvalidPublicKey);
         }
         
         // Check credential ID
         if credential_id.is_empty() {
-            return Err("Invalid credential ID".to_string());
+            return Err(PasskeyError::InvalidCredentialId);
         }
         
         // We're accepting all registrations with a valid challenge for now
@@ -121,19 +121,19 @@ impl PasskeyHandler {
         _authenticator_data: &str,
         user: &User,
         counter: u32,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, PasskeyError> {
         // In a real implementation, this would verify the WebAuthn assertion
         // But for now we'll just check if the passkey exists for this user
         
         // Find the passkey with the matching credential ID
         let passkey = match user.get_passkey_by_credential_id(credential_id) {
             Some(pk) => pk,
-            None => return Err("Passkey not found for this user".to_string()),
+            None => return Err(PasskeyError::CredentialNotFound),
         };
         
         // Check for replay attacks (counter should be greater than stored counter)
         if counter <= passkey.counter {
-            return Err("Possible replay attack detected".to_string());
+            return Err(PasskeyError::ReplayAttack);
         }
         
         // We're accepting all authentications with a valid challenge for now
