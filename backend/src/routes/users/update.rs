@@ -94,10 +94,7 @@ impl UserUpdate {
             return Err(UserError::PasswordToShort);
         }
         
-        let salt_str = match &self.user.salt {
-            Some(salt) => salt.as_str(),
-            None => return Err(UserError::PasswordHashingError),
-        };
+        let salt_str = &self.user.salt;
         
         let salt = SaltString::from_b64(salt_str).map_err(|_| UserError::PasswordHashingError)?;
         let argon2 = Argon2::default();
@@ -107,7 +104,7 @@ impl UserUpdate {
             .to_string();
         
         self.update_field("password", "HIDDEN", "HIDDEN");
-        self.user.password_hash = Some(password_hash);
+        self.user.password_hash = password_hash;
         Ok(())
     }
 

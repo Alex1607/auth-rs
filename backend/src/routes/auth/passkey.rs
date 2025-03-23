@@ -59,6 +59,7 @@ pub struct FinishRegistrationResponse {
 #[serde(rename_all = "camelCase")]
 pub struct StartAuthenticationRequest {
     pub email: Option<String>, // Optional email for the user to authenticate
+    pub credential_id: Option<String>, // Optional credential ID if user already chose a specific passkey
 }
 
 #[derive(Serialize)]
@@ -235,11 +236,12 @@ pub async fn finish_registration(
 // Process start authentication and return a Result
 async fn process_start_authentication(
     data: StartAuthenticationRequest,
-    _db: Connection<AuthRsDatabase>,
+    db: Connection<AuthRsDatabase>,
 ) -> ApiResult<StartAuthenticationResponse> {
-    // If email is provided, find the user to get their credentials
+    // We can either find a user by email or by credential ID
     let user = if let Some(email) = &data.email {
-        match User::get_by_email(email, &_db).await {
+        // Find user by email
+        match User::get_by_email(email, &db).await {
             Ok(user) => {
                 if user.disabled {
                     return Err(ApiError::Forbidden("User account is disabled".to_string()));
@@ -251,8 +253,30 @@ async fn process_start_authentication(
                 None
             }
         }
+    } else if let Some(credential_id) = &data.credential_id {
+        // Find user by credential ID
+        // In a real implementation, you would query the database for a user with this credential ID
+        match User::get_all(&db).await {
+            Ok(users) => {
+                let mut found_user = None;
+                for u in users {
+                    if let Some(_) = u.get_passkey_by_credential_id(credential_id) {
+                        if u.disabled {
+                            return Err(ApiError::Forbidden("User account is disabled".to_string()));
+                        }
+                        found_user = Some(u);
+                        break;
+                    }
+                }
+                found_user
+            }
+            Err(err) => {
+                return Err(PasskeyError::DatabaseError(format!("Failed to search for users: {}", err)).into());
+            }
+        }
     } else {
-        None
+        // Neither email nor credential ID provided
+        return Err(ApiError::BadRequest("Either email or credential ID must be provided".to_string()));
     };
 
     // Generate a challenge for authentication

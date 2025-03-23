@@ -53,8 +53,8 @@ pub struct User {
     pub email: String,
     pub first_name: String,
     pub last_name: String,
-    pub password_hash: Option<String>,  // Optional since users might only use passkeys
-    pub salt: Option<String>,           // Optional since users might only use passkeys
+    pub password_hash: String,  // No longer optional - users must have passwords
+    pub salt: String,           // No longer optional - users must have passwords
     pub totp_secret: Option<String>,
     pub passkeys: Option<Vec<Passkey>>, // Changed from String to a Vec of Passkey
     pub token: String,
@@ -73,7 +73,6 @@ pub struct UserDTO {
     pub first_name: String,
     pub last_name: String,
     pub roles: Vec<Uuid>,
-    pub has_password: bool,
     pub has_passkeys: bool,
     pub passkey_count: usize,
     pub mfa: bool,
@@ -95,16 +94,10 @@ impl User {
     }
 
     pub fn verify_password(&self, password: &str) -> Result<(), UserError> {
-        match &self.password_hash {
-            Some(hash) => {
-                let hash =
-                    PasswordHash::new(hash).map_err(|_| UserError::PasswordHashingError)?;
-                Argon2::default()
-                    .verify_password(password.as_bytes(), &hash)
-                    .map_err(|_| UserError::PasswordHashingError)
-            }
-            None => Err(UserError::PasswordNotSet),
-        }
+        let hash = PasswordHash::new(&self.password_hash).map_err(|_| UserError::PasswordHashingError)?;
+        Argon2::default()
+            .verify_password(password.as_bytes(), &hash)
+            .map_err(|_| UserError::PasswordHashingError)
     }
 
     pub fn to_dto(&self) -> UserDTO {
@@ -114,7 +107,6 @@ impl User {
             first_name: self.first_name.clone(),
             last_name: self.last_name.clone(),
             roles: self.roles.clone(),
-            has_password: self.password_hash.is_some(),
             has_passkeys: match &self.passkeys {
                 Some(keys) => !keys.is_empty(),
                 None => false,
@@ -131,22 +123,16 @@ impl User {
 
     pub fn new(
         email: String,
-        password: Option<String>,
+        password: String,  // Password is now required
         first_name: String,
         last_name: String,
     ) -> UserResult<Self> {
-        let (password_hash, salt) = match password {
-            Some(pass) => {
-                let salt = SaltString::generate(&mut OsRng);
-                let argon2 = Argon2::default();
-                let password_hash = argon2
-                    .hash_password(pass.as_bytes(), &salt)
-                    .map_err(|_| UserError::PasswordHashingError)?
-                    .to_string();
-                (Some(password_hash), Some(salt.as_str().to_string()))
-            },
-            None => (None, None),
-        };
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|_| UserError::PasswordHashingError)?
+            .to_string();
 
         Ok(Self {
             id: Uuid::new(),
@@ -154,7 +140,7 @@ impl User {
             first_name,
             last_name,
             password_hash,
-            salt,
+            salt: salt.as_str().to_string(),
             totp_secret: None,
             passkeys: None,
             token: Self::generate_token(),
@@ -184,8 +170,8 @@ impl User {
             email,
             first_name,
             last_name,
-            password_hash: Some(password_hash),
-            salt: Some(salt.as_str().to_string()),
+            password_hash,
+            salt: salt.as_str().to_string(),
             totp_secret: None,
             passkeys: None,
             token: Self::generate_token(),

@@ -22,7 +22,7 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct CreateUserData {
     pub email: String,
-    pub password: Option<String>,
+    pub password: String,
     pub first_name: String,
     pub last_name: String,
 }
@@ -61,14 +61,12 @@ async fn create_user_internal(
         return Err(UserError::FirstNameRequired);
     }
     
-    // Password validation is only done if a password is provided
-    if let Some(ref password) = data.password {
-        if password.len() < 8 {
-            return Err(UserError::PasswordToShort);
-        }
+    // Password validation
+    if data.password.len() < 8 {
+        return Err(UserError::PasswordToShort);
     }
 
-    // Create new user with optional password
+    // Create new user with required password
     let user = User::new(
         data.email.to_lowercase(),
         data.password,
