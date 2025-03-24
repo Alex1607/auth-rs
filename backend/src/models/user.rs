@@ -74,7 +74,6 @@ pub struct UserDTO {
     pub last_name: String,
     pub roles: Vec<Uuid>,
     pub has_passkeys: bool,
-    pub passkey_count: usize,
     pub mfa: bool,
     pub disabled: bool,
     pub created_at: DateTime,
@@ -110,10 +109,6 @@ impl User {
             has_passkeys: match &self.passkeys {
                 Some(keys) => !keys.is_empty(),
                 None => false,
-            },
-            passkey_count: match &self.passkeys {
-                Some(keys) => keys.len(),
-                None => 0,
             },
             mfa: self.totp_secret.is_some(),
             disabled: self.disabled,
@@ -435,36 +430,6 @@ impl User {
         match &self.passkeys {
             Some(passkeys) => passkeys.iter().find(|key| key.credential_id == credential_id),
             None => None,
-        }
-    }
-    
-    pub async fn update_passkey_counter(
-        &mut self,
-        credential_id: &str,
-        counter: u32,
-        connection: &Connection<AuthRsDatabase>,
-    ) -> UserResult<()> {
-        if let Some(ref mut passkeys) = self.passkeys {
-            let now = DateTime::now();
-            
-            let mut found = false;
-            for passkey in passkeys.iter_mut() {
-                if passkey.credential_id == credential_id {
-                    passkey.counter = counter;
-                    passkey.last_used = Some(now);
-                    found = true;
-                    break;
-                }
-            }
-            
-            if !found {
-                return Err(UserError::PasskeyNotFound(credential_id.to_string()));
-            }
-            
-            self.update(connection).await?;
-            Ok(())
-        } else {
-            Err(UserError::PasskeyNotFound(credential_id.to_string()))
         }
     }
 }

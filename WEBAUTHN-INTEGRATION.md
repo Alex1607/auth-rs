@@ -94,7 +94,6 @@ Response (successful authentication):
       "lastName": "Doe",
       "roles": ["uuid-1", "uuid-2"],
       "has_passkeys": true,
-      "passkey_count": 1,
       "mfa": false,
       "disabled": false,
       "createdAt": "2023-10-01T12:00:00Z"

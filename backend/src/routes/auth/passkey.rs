@@ -392,11 +392,6 @@ async fn process_finish_authentication(
         data.counter,
     ) {
         Ok(true) => {
-            // Authentication was successful - update the passkey counter
-            user.update_passkey_counter(&data.credential_id, data.counter, &db)
-                .await
-                .map_err(|err| PasskeyError::UpdateError(format!("Failed to update passkey counter: {}", err)))?;
-
             // Generate a new token for the user
             let new_token = User::generate_token();
             let _old_token = user.token.clone();
