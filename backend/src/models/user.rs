@@ -24,16 +24,39 @@ use super::user_error::{UserError, UserResult};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(crate = "rocket::serde")]
 #[serde(rename_all = "camelCase")]
+pub struct Passkey {
+    pub id: String,
+    pub name: String,
+    pub public_key: String,
+    pub credential_id: String,
+    pub counter: u32,
+    pub created_at: DateTime,
+    pub last_used: Option<DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
+#[serde(rename_all = "camelCase")]
+pub struct PasskeyDTO {
+    pub id: String,
+    pub name: String,
+    pub created_at: DateTime,
+    pub last_used: Option<DateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
+#[serde(rename_all = "camelCase")]
 pub struct User {
     #[serde(rename = "_id")]
     pub id: Uuid,
     pub email: String,
     pub first_name: String,
     pub last_name: String,
-    pub password_hash: String,
-    pub salt: String,
+    pub password_hash: String,  // No longer optional - users must have passwords
+    pub salt: String,           // No longer optional - users must have passwords
     pub totp_secret: Option<String>,
-    pub passkeys: Option<String>, // replace this with the actual DTO, this is just a placeholder so the database can already generate the field.
+    pub passkeys: Option<Vec<Passkey>>, // Changed from String to a Vec of Passkey
     pub token: String,
     pub roles: Vec<Uuid>,
     pub disabled: bool,
@@ -50,8 +73,8 @@ pub struct UserDTO {
     pub first_name: String,
     pub last_name: String,
     pub roles: Vec<Uuid>,
+    pub has_passkeys: bool,
     pub mfa: bool,
-    pub passkeys: bool,
     pub disabled: bool,
     pub created_at: DateTime,
 }
@@ -70,8 +93,7 @@ impl User {
     }
 
     pub fn verify_password(&self, password: &str) -> Result<(), UserError> {
-        let hash =
-            PasswordHash::new(&self.password_hash).map_err(|_| UserError::PasswordHashingError)?;
+        let hash = PasswordHash::new(&self.password_hash).map_err(|_| UserError::PasswordHashingError)?;
         Argon2::default()
             .verify_password(password.as_bytes(), &hash)
             .map_err(|_| UserError::PasswordHashingError)
@@ -84,8 +106,11 @@ impl User {
             first_name: self.first_name.clone(),
             last_name: self.last_name.clone(),
             roles: self.roles.clone(),
+            has_passkeys: match &self.passkeys {
+                Some(keys) => !keys.is_empty(),
+                None => false,
+            },
             mfa: self.totp_secret.is_some(),
-            passkeys: self.passkeys.is_some(),
             disabled: self.disabled,
             created_at: self.created_at,
         }
@@ -93,7 +118,7 @@ impl User {
 
     pub fn new(
         email: String,
-        password: String,
+        password: String,  // Password is now required
         first_name: String,
         last_name: String,
     ) -> UserResult<Self> {
@@ -349,5 +374,62 @@ impl User {
     fn get_collection(connection: &Connection<AuthRsDatabase>) -> Collection<Self> {
         let db = get_main_db(connection);
         db.collection(Self::COLLECTION_NAME)
+    }
+
+    pub async fn add_passkey(
+        &mut self,
+        name: String,
+        public_key: String,
+        credential_id: String,
+        connection: &Connection<AuthRsDatabase>,
+    ) -> UserResult<Passkey> {
+        let passkey = Passkey {
+            id: Uuid::new().to_string(),
+            name,
+            public_key,
+            credential_id,
+            counter: 0,
+            created_at: DateTime::now(),
+            last_used: None,
+        };
+
+        let mut passkeys = match self.passkeys.clone() {
+            Some(keys) => keys,
+            None => Vec::new(),
+        };
+        
+        passkeys.push(passkey.clone());
+        self.passkeys = Some(passkeys);
+        
+        self.update(connection).await?;
+        
+        Ok(passkey)
+    }
+    
+    pub async fn remove_passkey(
+        &mut self,
+        passkey_id: &str,
+        connection: &Connection<AuthRsDatabase>,
+    ) -> UserResult<()> {
+        if let Some(ref mut passkeys) = self.passkeys {
+            let initial_len = passkeys.len();
+            passkeys.retain(|key| key.id != passkey_id);
+            
+            if passkeys.len() == initial_len {
+                return Err(UserError::PasskeyNotFound(passkey_id.to_string()));
+            }
+            
+            self.update(connection).await?;
+            Ok(())
+        } else {
+            Err(UserError::PasskeyNotFound(passkey_id.to_string()))
+        }
+    }
+    
+    pub fn get_passkey_by_credential_id(&self, credential_id: &str) -> Option<&Passkey> {
+        match &self.passkeys {
+            Some(passkeys) => passkeys.iter().find(|key| key.credential_id == credential_id),
+            None => None,
+        }
     }
 }

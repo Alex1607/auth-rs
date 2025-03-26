@@ -98,16 +98,21 @@ async fn process_mfa(
                 token: Some(TOTP::get_qr_base64(flow.totp.as_ref().unwrap()).unwrap()),
                 mfa_required: false,
                 mfa_flow_id: None,
+                use_passkey: false,
+                has_passkeys: user.passkeys.as_ref().map_or(false, |p| !p.is_empty()),
             },
         ))
     } else {
+        let user = &flow.user;
         Ok((
             "MFA complete".to_string(),
             LoginResponse {
-                user: Some(flow.user.to_dto()),
-                token: Some(flow.user.token.to_string()),
+                user: Some(user.to_dto()),
+                token: Some(user.token.to_string()),
                 mfa_required: false,
                 mfa_flow_id: None,
+                use_passkey: false,
+                has_passkeys: user.passkeys.as_ref().map_or(false, |p| !p.is_empty()),
             },
         ))
     }

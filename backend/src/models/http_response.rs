@@ -29,32 +29,32 @@ impl<T> HttpResponse<T> {
     }
 
     // Create an error response
-    pub fn error(status: u16, message: &str) -> Self {
+    pub fn error(status: u16, message: &str, data: Option<T>) -> Self {
         Self {
             status,
             message: message.to_string(),
-            data: None,
+            data,
         }
     }
 
     // Common error responses
     pub fn not_found(message: &str) -> Self {
-        Self::error(404, message)
+        Self::error(404, message, None)
     }
 
     pub fn bad_request(message: &str) -> Self {
-        Self::error(400, message)
+        Self::error(400, message, None)
     }
 
     pub fn unauthorized(message: &str) -> Self {
-        Self::error(401, message)
+        Self::error(401, message, None)
     }
 
     pub fn forbidden(message: &str) -> Self {
-        Self::error(403, message)
+        Self::error(403, message, None)
     }
 
     pub fn internal_error(message: &str) -> Self {
-        Self::error(500, message)
+        Self::error(500, message, None)
     }
 }

@@ -20,7 +20,7 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct LoginData {
     pub email: String,
-    pub password: String,
+    pub password: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -31,6 +31,46 @@ pub struct LoginResponse {
     pub token: Option<String>,
     pub mfa_required: bool,
     pub mfa_flow_id: Option<Uuid>,
+    pub use_passkey: bool,
+    pub has_passkeys: bool,
+}
+
+/// # Authentication Flow
+/// This API supports multiple authentication methods:
+/// 
+/// 1. Traditional Password Flow:
+///    - User provides email and password
+///    - If MFA is enabled, user is prompted for MFA code
+///    - On success, user receives a token
+///
+/// 2. Passkey Authentication Flow:
+///    - User provides email (password is optional)
+///    - If user has passkeys, they're prompted to use passkey authentication
+///    - User completes passkey authentication via /auth/passkey/login endpoints
+///    - On success, user receives a token
+///
+/// The API is designed to be flexible, allowing users to authenticate with
+/// either passwords, passkeys, or a combination of both plus MFA.
+#[post("/auth/login", format = "json", data = "<data>")]
+pub async fn login(
+    db: Connection<AuthRsDatabase>,
+    data: Json<LoginData>,
+) -> (Status, Json<HttpResponse<LoginResponse>>) {
+    let login_data = data.into_inner();
+
+    match process_login(&db, login_data).await {
+        Ok(response) => {
+            let message = if response.mfa_required {
+                "MFA required"
+            } else if response.use_passkey {
+                "Please use passkey authentication"
+            } else {
+                "Login successful"
+            };
+            json_response(HttpResponse::success(message, response))
+        }
+        Err(err) => json_response(err.into()),
+    }
 }
 
 // Process login and return a Result
@@ -46,12 +86,41 @@ async fn process_login(
         return Err(ApiError::Forbidden("User is disabled".to_string()));
     }
 
-    if user.verify_password(&login_data.password).is_err() {
+    // Check what authentication methods the user has
+    let has_passkeys = match &user.passkeys {
+        Some(passkeys) => !passkeys.is_empty(),
+        None => false,
+    };
+
+    // If no password is provided, return auth options
+    if login_data.password.is_none() {
+        if has_passkeys {
+            // Suggest using passkey authentication
+            return Ok(LoginResponse {
+                user: None,
+                token: None,
+                mfa_required: false,
+                mfa_flow_id: None,
+                use_passkey: true,
+                has_passkeys,
+            });
+        } else {
+            // User needs to provide a password
+            return Err(ApiError::BadRequest("Password is required for this account".to_string()));
+        }
+    }
+
+    // Password authentication flow
+    let password = login_data.password.unwrap();
+    
+    // Verify the password
+    if user.verify_password(&password).is_err() {
         return Err(ApiError::Unauthorized(
             "Invalid email or password".to_string(),
         ));
     }
 
+    // Check if MFA is required
     if MfaHandler::is_mfa_required(&user) {
         let mfa_flow = MfaHandler::start_login_flow(&user)
             .await
@@ -62,34 +131,18 @@ async fn process_login(
             token: None,
             mfa_required: true,
             mfa_flow_id: Some(mfa_flow.flow_id),
+            use_passkey: false,
+            has_passkeys,
         });
     }
 
-    Ok(LoginResponse {
+    // Password authentication successful, no MFA required
+    return Ok(LoginResponse {
         user: Some(user.to_dto()),
         token: Some(user.token),
         mfa_required: false,
         mfa_flow_id: None,
-    })
-}
-
-#[allow(unused)]
-#[post("/auth/login", format = "json", data = "<data>")]
-pub async fn login(
-    db: Connection<AuthRsDatabase>,
-    data: Json<LoginData>,
-) -> (Status, Json<HttpResponse<LoginResponse>>) {
-    let login_data = data.into_inner();
-
-    match process_login(&db, login_data).await {
-        Ok(response) => {
-            let message = if response.mfa_required {
-                "MFA required"
-            } else {
-                "Login successful"
-            };
-            json_response(HttpResponse::success(message, response))
-        }
-        Err(err) => json_response(err.into()),
-    }
+        use_passkey: false,
+        has_passkeys,
+    });
 }

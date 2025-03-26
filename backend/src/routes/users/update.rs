@@ -93,13 +93,16 @@ impl UserUpdate {
         if password.len() < 8 {
             return Err(UserError::PasswordToShort);
         }
-        let salt =
-            SaltString::from_b64(&self.user.salt).map_err(|_| UserError::PasswordHashingError)?;
+        
+        let salt_str = &self.user.salt;
+        
+        let salt = SaltString::from_b64(salt_str).map_err(|_| UserError::PasswordHashingError)?;
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
             .map_err(|_| UserError::PasswordHashingError)?
             .to_string();
+        
         self.update_field("password", "HIDDEN", "HIDDEN");
         self.user.password_hash = password_hash;
         Ok(())
