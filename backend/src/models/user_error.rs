@@ -1,3 +1,4 @@
+use std::fmt::format;
 use crate::models::http_response::HttpResponse;
 use mongodb::bson::Uuid;
 use thiserror::Error;
@@ -16,8 +17,8 @@ pub enum UserError {
     #[error("Missing permissions to perform this action")]
     MissingPermissions,
 
-    #[error("Invalid registration code")]
-    RegistrationCodeInvalid,
+    #[error("Invalid registration code {0}")]
+    RegistrationCodeInvalid(String),
 
     #[error("Cannot modify system user")]
     SystemUserModification,
@@ -80,9 +81,9 @@ impl<T> From<UserError> for HttpResponse<T> {
                 message: "Missing permissions to perform this action".to_string(),
                 data: None,
             },
-            UserError::RegistrationCodeInvalid => HttpResponse {
+            UserError::RegistrationCodeInvalid(msg) => HttpResponse {
                 status: 400,
-                message: "Invalid registration code".to_string(),
+                message: format!("Invalid registration code ({})", msg),
                 data: None,
             },
             UserError::SystemUserModification => HttpResponse {

@@ -26,8 +26,9 @@ use webauthn_rs::prelude::{DiscoverableAuthentication, PasskeyRegistration};
 
 // oauth codes stored in memory
 lazy_static::lazy_static! {
-    //TODO: Replace with Redis or other cache, so this application can be stateless
-    static ref OAUTH_CODES: Mutex<HashMap<u32, TokenOAuthData>> = Mutex::new(HashMap::new());
+    // OAuth codes stored in memory (keyed by a cryptographically strong random String)
+    // TODO: Replace with Redis or other cache for stateless, scalable storage
+    static ref OAUTH_CODES: Mutex<HashMap<String, TokenOAuthData>> = Mutex::new(HashMap::new());
     static ref MFA_SESSIONS: Mutex<HashMap<Uuid, MfaHandler>> = Mutex::new(HashMap::new());
     static ref REGISTRATIONS: Mutex<HashMap<Uuid, (Uuid, PasskeyRegistration)>> =
         Mutex::new(HashMap::new());

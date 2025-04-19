@@ -1,5 +1,5 @@
 use mongodb::bson::Uuid;
-use rand::Rng;
+use rand::{rng, thread_rng, Rng, RngCore};
 use rocket::http::Status;
 use rocket::{
     post,
@@ -32,7 +32,8 @@ pub struct AuthorizeOAuthData {
 pub struct AuthorizeOAuthResponse {
     pub client_id: Uuid,
     pub redirect_uri: String,
-    pub code: u32,
+    // Authorization code (UUID string)
+    pub code: String,
 }
 
 #[allow(unused)]
@@ -56,7 +57,9 @@ pub async fn authorize_oauth_application(
         return (Status::BadRequest, None);
     }
 
-    let code = rand::rng().random_range(10000000..99999999);
+    let mut random_bytes = vec![0u8; 64];
+    rng().fill_bytes(&mut random_bytes);
+    let code = hex::encode(random_bytes);
 
     let oauth_application = match OAuthApplication::get_by_id(data.client_id, &db).await {
         Ok(app) => app,
@@ -72,17 +75,17 @@ pub async fn authorize_oauth_application(
     }
 
     let mut codes = OAUTH_CODES.lock().await;
-    let redirect_uri = data.redirect_uri.clone();
+    let code_key = code.clone();
     codes.insert(
-        code,
+        code_key,
         TokenOAuthData {
             client_id: oauth_application.id,
             client_secret: oauth_application.secret,
             user_id: Some(req_entity.user_id),
-            code,
+            code: code.clone(),
             scope: Some(data.scope),
             grant_type: "authorization_code".to_string(),
-            redirect_uri: data.redirect_uri,
+            redirect_uri: data.redirect_uri.clone(),
         },
     );
     drop(codes);
@@ -91,10 +94,12 @@ pub async fn authorize_oauth_application(
     //  We can not and should not rely on the application not crashing or restarting
     //  This application should be completely stateless
     // delete code after 5 minutes
+    let code_clone_for_task = code.clone(); // Clone the code for the task
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
         let mut codes = OAUTH_CODES.lock().await;
-        codes.remove(&code);
+        // Use the cloned code inside the task
+        codes.remove(&code_clone_for_task);
         drop(codes);
     });
 
@@ -102,7 +107,9 @@ pub async fn authorize_oauth_application(
         Status::Ok,
         Some(Json(AuthorizeOAuthResponse {
             client_id: data.client_id,
-            redirect_uri,
+            // return the same redirect URI
+            redirect_uri: data.redirect_uri.clone(),
+            // Use the original code for the response
             code,
         })),
     )

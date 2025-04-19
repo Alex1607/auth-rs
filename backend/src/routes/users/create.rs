@@ -76,8 +76,8 @@ async fn create_user_internal(
         registration_token =
             match RegistrationToken::get_by_code(data.registration_code.unwrap(), &db).await {
                 Ok(token) => Some(token),
-                Err(_) => {
-                    return Err(UserError::RegistrationCodeInvalid);
+                Err(e) => {
+                    return Err(UserError::RegistrationCodeInvalid(e.to_string()));
                 }
             }
     }
@@ -111,7 +111,7 @@ async fn create_user_internal(
         token
             .use_token(&db, user.id)
             .await
-            .map_err(|_| UserError::RegistrationCodeInvalid)?;
+            .map_err(|e| UserError::RegistrationCodeInvalid(e.to_string()))?;
 
         for role_id in token.auto_roles {
             user.roles.push(role_id);
